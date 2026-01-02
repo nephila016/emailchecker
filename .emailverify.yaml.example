@@ -1,0 +1,34 @@
+# emailverify configuration file
+# Copy to ~/.emailverify.yaml or use -c flag
+
+# Default connection settings
+defaults:
+  timeout: 15         # Connection timeout in seconds
+  delay: 2.0          # Delay between checks in seconds
+  jitter: 1.0         # Random jitter added to delay
+  workers: 3          # Number of concurrent workers
+  port: 25            # SMTP port
+  from_address: test@gmail.com
+  helo_domain: mail.verification-check.com
+
+# Health check settings
+health:
+  email: ""           # Known-valid email for health checks
+  interval: 10        # Check every N emails
+  reconnect_interval: 5  # Reconnect every N emails
+
+# Output settings
+output:
+  format: csv         # Default output format (csv, json, jsonl, txt)
+  colored: true       # Enable colored console output
+
+# Debug settings
+debug:
+  enabled: false      # Enable debug mode
+  level: 1            # Debug level (1=basic, 2=detailed, 3=full)
+  file: ""            # Debug log file path
+
+# Proxy settings (optional)
+proxy:
+  enabled: false
+  url: ""             # socks5://user:pass@host:port
