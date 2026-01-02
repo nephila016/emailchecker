@@ -73,7 +73,7 @@ func runDomain(cmd *cobra.Command, args []string) error {
 
 	// Check catch-all if requested
 	if domainCheckCatchAll && result.HasMX {
-		result.IsCatchAll = checkCatchAll(domain, result.MXRecords[0], config)
+		result.IsCatchAll = performCatchAllCheck(domain, result.MXRecords[0], config)
 	}
 
 	if domainJSON {
@@ -83,7 +83,7 @@ func runDomain(cmd *cobra.Command, args []string) error {
 	return outputDomainConsole(result)
 }
 
-func checkCatchAll(domain, mxHost string, config *verifier.Config) bool {
+func performCatchAllCheck(domain, mxHost string, config *verifier.Config) bool {
 	log := debug.GetLogger()
 	log.Info("CATCHALL", "Testing catch-all for %s via %s", domain, mxHost)
 
