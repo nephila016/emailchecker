@@ -44,35 +44,35 @@ Download pre-built binaries from the [Releases](https://github.com/nephila016/em
 
 ```bash
 # Basic verification
-emailverify check user@example.com
+emailchecker check user@example.com
 
 # With custom server
-emailverify check user@example.com -i mail.example.com -p 25
+emailchecker check user@example.com -i mail.example.com -p 25
 
 # Skip SMTP (syntax/DNS only)
-emailverify check user@example.com --skip-smtp
+emailchecker check user@example.com --skip-smtp
 
 # JSON output
-emailverify check user@example.com --json
+emailchecker check user@example.com --json
 
 # With debug output
-emailverify check user@example.com -d
+emailchecker check user@example.com -d
 ```
 
 ### Bulk Verification
 
 ```bash
 # Basic bulk verification
-emailverify bulk -f emails.txt -o results.csv
+emailchecker bulk -f emails.txt -o results.csv
 
 # With custom settings
-emailverify bulk -f emails.txt -i mail.example.com -p 25 -w 5 -d 3
+emailchecker bulk -f emails.txt -i mail.example.com -p 25 -w 5 -d 3
 
 # With health checks
-emailverify bulk -f emails.txt --health-email info@example.com --health-interval 10
+emailchecker bulk -f emails.txt --health-email info@example.com --health-interval 10
 
 # Full options
-emailverify bulk -f emails.txt \
+emailchecker bulk -f emails.txt \
   -i mail.example.com \
   -p 25 \
   -w 3 \
@@ -86,16 +86,16 @@ emailverify bulk -f emails.txt \
 
 ```bash
 # Basic domain check
-emailverify domain example.com
+emailchecker domain example.com
 
 # With catch-all detection
-emailverify domain example.com --check-catchall
+emailchecker domain example.com --check-catchall
 
 # With SPF and DMARC
-emailverify domain example.com --check-spf --check-dmarc
+emailchecker domain example.com --check-spf --check-dmarc
 
 # JSON output
-emailverify domain example.com --json
+emailchecker domain example.com --json
 ```
 
 ## Commands
@@ -105,7 +105,7 @@ emailverify domain example.com --json
 Verify a single email address.
 
 ```
-emailverify check <email> [flags]
+emailchecker check <email> [flags]
 
 Flags:
   -i, --ip string       Custom SMTP server IP/hostname
@@ -124,7 +124,7 @@ Flags:
 Verify multiple emails from a file.
 
 ```
-emailverify bulk [flags]
+emailchecker bulk [flags]
 
 Flags:
   -f, --file string           Input file with emails (required)
@@ -148,7 +148,7 @@ Flags:
 Check domain-level information.
 
 ```
-emailverify domain <domain> [flags]
+emailchecker domain <domain> [flags]
 
 Flags:
       --check-catchall   Check for catch-all configuration
@@ -161,7 +161,7 @@ Flags:
 ## Global Flags
 
 ```
-  -c, --config string      Config file (default $HOME/.emailverify.yaml)
+  -c, --config string      Config file (default $HOME/.emailchecker.yaml)
   -d, --debug              Enable debug mode (use -d, -dd, -ddd for more detail)
       --debug-file string  Write debug output to file
   -q, --quiet              Quiet mode - minimal output
@@ -174,16 +174,16 @@ Use debug flags to see detailed SMTP conversation:
 
 ```bash
 # Basic debug
-emailverify check user@example.com -d
+emailchecker check user@example.com -d
 
 # Detailed SMTP conversation
-emailverify check user@example.com -dd
+emailchecker check user@example.com -dd
 
 # Full packet dumps
-emailverify check user@example.com -ddd
+emailchecker check user@example.com -ddd
 
 # Write debug to file
-emailverify check user@example.com -d --debug-file debug.log
+emailchecker check user@example.com -d --debug-file debug.log
 ```
 
 ## Output Formats
@@ -199,7 +199,7 @@ The tool automatically detects output format from file extension:
 
 ## Configuration File
 
-Create `~/.emailverify.yaml`:
+Create `~/.emailchecker.yaml`:
 
 ```yaml
 defaults:
