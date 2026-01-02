@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/yourusername/emailverify/internal/debug"
+	"github.com/nephila016/emailchecker/internal/debug"
 )
 
 // RFC 5322 compliant email regex (simplified but effective)

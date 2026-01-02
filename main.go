@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/yourusername/emailverify/cmd"
+	"github.com/nephila016/emailchecker/cmd"
 )
 
 var (

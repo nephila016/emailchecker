@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/yourusername/emailverify/internal/debug"
-	"github.com/yourusername/emailverify/internal/verifier"
+	"github.com/nephila016/emailchecker/internal/debug"
+	"github.com/nephila016/emailchecker/internal/verifier"
 )
 
 // Job represents a verification job

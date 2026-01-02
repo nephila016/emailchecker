@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourusername/emailverify/internal/debug"
+	"github.com/nephila016/emailchecker/internal/debug"
 )
 
 // MXRecord represents an MX record with priority

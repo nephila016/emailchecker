@@ -8,9 +8,9 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
-	"github.com/yourusername/emailverify/internal/debug"
-	"github.com/yourusername/emailverify/internal/output"
-	"github.com/yourusername/emailverify/internal/verifier"
+	"github.com/nephila016/emailchecker/internal/debug"
+	"github.com/nephila016/emailchecker/internal/output"
+	"github.com/nephila016/emailchecker/internal/verifier"
 )
 
 var (

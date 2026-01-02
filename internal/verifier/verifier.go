@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/yourusername/emailverify/internal/classifier"
-	"github.com/yourusername/emailverify/internal/debug"
+	"github.com/nephila016/emailchecker/internal/classifier"
+	"github.com/nephila016/emailchecker/internal/debug"
 )
 
 // Config holds verifier configuration

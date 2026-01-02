@@ -1,4 +1,4 @@
-module github.com/yourusername/emailverify
+module github.com/nephila016/emailchecker
 
 go 1.21
 

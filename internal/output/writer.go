@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/yourusername/emailverify/internal/verifier"
+	"github.com/nephila016/emailchecker/internal/verifier"
 )
 
 // Writer interface for different output formats
