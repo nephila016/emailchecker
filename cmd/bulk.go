@@ -56,10 +56,10 @@ Features:
   - Duplicate email removal
 
 Examples:
-  emailverify bulk -f emails.txt -o results.csv
-  emailverify bulk -f emails.txt -i mail.example.com -p 25 -w 5
-  emailverify bulk -f emails.txt --health-email info@example.com
-  emailverify bulk -f emails.txt -d 3 --jitter 2 -o results.json`,
+  emailchecker bulk -f emails.txt -o results.csv
+  emailchecker bulk -f emails.txt -i mail.example.com -p 25 -w 5
+  emailchecker bulk -f emails.txt --health-email info@example.com
+  emailchecker bulk -f emails.txt -d 3 --jitter 2 -o results.json`,
 	RunE: runBulk,
 }
 

@@ -27,10 +27,10 @@ var domainCmd = &cobra.Command{
 and catch-all configuration.
 
 Examples:
-  emailverify domain example.com
-  emailverify domain example.com --check-catchall
-  emailverify domain example.com --check-spf --check-dmarc
-  emailverify domain example.com --json`,
+  emailchecker domain example.com
+  emailchecker domain example.com --check-catchall
+  emailchecker domain example.com --check-spf --check-dmarc
+  emailchecker domain example.com --json`,
 	Args: cobra.ExactArgs(1),
 	RunE: runDomain,
 }

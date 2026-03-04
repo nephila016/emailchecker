@@ -38,10 +38,10 @@ The verification process includes:
   5. Catch-all detection (optional)
 
 Examples:
-  emailverify check user@example.com
-  emailverify check user@example.com -i 192.168.1.100 -p 25
-  emailverify check user@example.com --skip-smtp
-  emailverify check user@example.com --json`,
+  emailchecker check user@example.com
+  emailchecker check user@example.com -i 192.168.1.100 -p 25
+  emailchecker check user@example.com --skip-smtp
+  emailchecker check user@example.com --json`,
 	Args: cobra.ExactArgs(1),
 	RunE: runCheck,
 }

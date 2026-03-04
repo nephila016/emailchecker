@@ -21,9 +21,9 @@ var (
 
 // rootCmd represents the base command
 var rootCmd = &cobra.Command{
-	Use:   "emailverify",
+	Use:   "emailchecker",
 	Short: "Email verification tool using SMTP RCPT TO method",
-	Long: `emailverify is a production-ready CLI tool for verifying email addresses
+	Long: `emailchecker is a production-ready CLI tool for verifying email addresses
 using the SMTP RCPT TO method without sending actual emails.
 
 Features:
@@ -36,9 +36,9 @@ Features:
   - Multiple output formats (JSON, CSV, TXT)
 
 Examples:
-  emailverify check user@example.com
-  emailverify bulk -f emails.txt -o results.csv
-  emailverify domain example.com --check-catchall`,
+  emailchecker check user@example.com
+  emailchecker bulk -f emails.txt -o results.csv
+  emailchecker domain example.com --check-catchall`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		// Initialize debug logging
 		level := debug.Level(debugLevel)
@@ -70,7 +70,7 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	// Global flags
-	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default $HOME/.emailverify.yaml)")
+	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default $HOME/.emailchecker.yaml)")
 	rootCmd.PersistentFlags().CountVarP(&debugLevel, "debug", "d", "Enable debug mode (use -d, -dd, -ddd for more detail)")
 	rootCmd.PersistentFlags().StringVar(&debugFile, "debug-file", "", "Write debug output to file")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "Quiet mode - minimal output")
@@ -90,7 +90,7 @@ func initConfig() {
 			viper.AddConfigPath(home)
 		}
 		viper.AddConfigPath(".")
-		viper.SetConfigName(".emailverify")
+		viper.SetConfigName(".emailchecker")
 		viper.SetConfigType("yaml")
 	}
 

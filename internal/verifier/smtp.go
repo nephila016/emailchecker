@@ -354,14 +354,14 @@ func GenerateRandomEmail(domain string) string {
 	b := make([]byte, length)
 	if _, err := rand.Read(b); err != nil {
 		// Fallback: use time-based suffix (should never happen in practice)
-		return fmt.Sprintf("emailverify_test_%d@%s", time.Now().UnixNano(), domain)
+		return fmt.Sprintf("emailchecker_test_%d@%s", time.Now().UnixNano(), domain)
 	}
 
 	result := make([]byte, length)
 	for i, v := range b {
 		result[i] = charset[int(v)%len(charset)]
 	}
-	return fmt.Sprintf("emailverify_test_%s@%s", string(result), domain)
+	return fmt.Sprintf("emailchecker_test_%s@%s", string(result), domain)
 }
 
 // VerifyEmail performs SMTP verification for a single email

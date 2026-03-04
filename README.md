@@ -1,10 +1,10 @@
-# emailverify
+# emailchecker
 
 A production-ready CLI tool for verifying email addresses using the SMTP `RCPT TO` method — without sending any actual emails.
 
 ## How It Works
 
-emailverify probes mail servers directly to check whether an email address exists. For each address it:
+emailchecker probes mail servers directly to check whether an email address exists. For each address it:
 
 1. **Validates syntax** (RFC 5322)
 2. **Looks up MX records** for the domain (with automatic fallback to secondary MX servers)
@@ -46,7 +46,7 @@ git clone https://github.com/nephila016/emailchecker.git
 cd emailchecker
 go mod tidy
 make build
-# binary: ./bin/emailverify
+# binary: ./bin/emailchecker
 ```
 
 ### go install
@@ -65,13 +65,13 @@ Pre-built binaries are available on the [Releases](https://github.com/nephila016
 
 ```bash
 # Verify a single email
-emailverify check user@example.com
+emailchecker check user@example.com
 
 # Verify from a file, save results to CSV
-emailverify bulk -f emails.txt -o results.csv
+emailchecker bulk -f emails.txt -o results.csv
 
 # Check a domain's mail configuration
-emailverify domain example.com --check-catchall --check-spf --check-dmarc
+emailchecker domain example.com --check-catchall --check-spf --check-dmarc
 ```
 
 ---
@@ -81,30 +81,30 @@ emailverify domain example.com --check-catchall --check-spf --check-dmarc
 ### `check` — Verify a single email
 
 ```
-emailverify check <email> [flags]
+emailchecker check <email> [flags]
 ```
 
 ```bash
 # Basic check (syntax + DNS + SMTP)
-emailverify check user@example.com
+emailchecker check user@example.com
 
 # Syntax and DNS only (no SMTP connection)
-emailverify check user@example.com --skip-smtp
+emailchecker check user@example.com --skip-smtp
 
 # Use a specific SMTP server instead of auto-resolving MX
-emailverify check user@example.com -i mail.example.com -p 25
+emailchecker check user@example.com -i mail.example.com -p 25
 
 # Detect catch-all (sends a random probe address after the real one)
-emailverify check user@example.com --catch-all
+emailchecker check user@example.com --catch-all
 
 # JSON output (pipe-friendly)
-emailverify check user@example.com --json
+emailchecker check user@example.com --json
 
 # Save to file (format auto-detected from extension)
-emailverify check user@example.com -o result.json
+emailchecker check user@example.com -o result.json
 
 # Full debug — see every SMTP command and response
-emailverify check user@example.com -ddd
+emailchecker check user@example.com -ddd
 ```
 
 **Flags:**
@@ -126,29 +126,29 @@ emailverify check user@example.com -ddd
 ### `bulk` — Verify many emails from a file
 
 ```
-emailverify bulk -f <file> [flags]
+emailchecker bulk -f <file> [flags]
 ```
 
 Input file format: one email per line. Blank lines and lines starting with `#` are ignored. **Duplicate addresses are removed automatically** before processing.
 
 ```bash
 # Basic bulk run
-emailverify bulk -f emails.txt -o results.csv
+emailchecker bulk -f emails.txt -o results.csv
 
 # 5 workers, 3s delay, save as JSON Lines
-emailverify bulk -f emails.txt -w 5 -d 3 -o results.jsonl
+emailchecker bulk -f emails.txt -w 5 -d 3 -o results.jsonl
 
 # Use a custom SMTP server
-emailverify bulk -f emails.txt -i mail.example.com -p 25
+emailchecker bulk -f emails.txt -i mail.example.com -p 25
 
 # Health checks every 10 emails to detect if the server is blocking you
-emailverify bulk -f emails.txt --health-email info@yourdomain.com --health-interval 10
+emailchecker bulk -f emails.txt --health-email info@yourdomain.com --health-interval 10
 
 # Syntax + DNS only (no SMTP, very fast)
-emailverify bulk -f emails.txt --skip-smtp -o results.csv
+emailchecker bulk -f emails.txt --skip-smtp -o results.csv
 
 # Full example
-emailverify bulk \
+emailchecker bulk \
   -f emails.txt \
   -w 3 \
   -d 2 \
@@ -186,18 +186,18 @@ emailverify bulk \
 ### `domain` — Check a domain's mail configuration
 
 ```
-emailverify domain <domain> [flags]
+emailchecker domain <domain> [flags]
 ```
 
 ```bash
 # MX records + classification
-emailverify domain example.com
+emailchecker domain example.com
 
 # Full check: MX + SPF + DMARC + catch-all
-emailverify domain example.com --check-spf --check-dmarc --check-catchall
+emailchecker domain example.com --check-spf --check-dmarc --check-catchall
 
 # JSON output
-emailverify domain example.com --check-spf --check-dmarc --json
+emailchecker domain example.com --check-spf --check-dmarc --json
 ```
 
 **Flags:**
@@ -222,7 +222,7 @@ These flags work on all commands:
 | `--debug-file <path>` | Write debug output to a file instead of stderr |
 | `-q, --quiet` | Suppress all output except results |
 | `--no-color` | Disable colored output |
-| `-c, --config <path>` | Config file path (default: `~/.emailverify.yaml`) |
+| `-c, --config <path>` | Config file path (default: `~/.emailchecker.yaml`) |
 
 ---
 
@@ -264,7 +264,7 @@ Format is automatically detected from the output file extension:
 
 ## Configuration File
 
-Create `~/.emailverify.yaml` (copy from `.emailverify.yaml.example` in the repo):
+Create `~/.emailchecker.yaml` (copy from `.emailchecker.yaml.example` in the repo):
 
 ```yaml
 defaults:
@@ -297,16 +297,16 @@ Debug mode logs every SMTP command and response so you can see exactly what's ha
 
 ```bash
 # Level 1: info messages
-emailverify check user@example.com -d
+emailchecker check user@example.com -d
 
 # Level 2: detailed (DNS results, SMTP banner, TLS info)
-emailverify check user@example.com -dd
+emailchecker check user@example.com -dd
 
 # Level 3: full trace (every SMTP send/recv line)
-emailverify check user@example.com -ddd
+emailchecker check user@example.com -ddd
 
 # Write debug output to a file (useful for bulk runs)
-emailverify bulk -f emails.txt -dd --debug-file smtp-debug.log
+emailchecker bulk -f emails.txt -dd --debug-file smtp-debug.log
 ```
 
 ---
@@ -340,7 +340,7 @@ duplicate@example.com   # this duplicate will be removed automatically
 ## Building
 
 ```bash
-# Build binary to ./bin/emailverify
+# Build binary to ./bin/emailchecker
 make build
 
 # Build for all platforms
