@@ -6,10 +6,50 @@ import (
 	"net"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nephila016/emailchecker/internal/debug"
 )
+
+// mxCacheTTL is how long MX lookup results are cached.
+const mxCacheTTL = 10 * time.Minute
+
+// mxCache caches DNS MX results keyed by domain.
+// This dramatically reduces DNS traffic during bulk verification where
+// many emails share the same domain.
+var mxCache struct {
+	sync.RWMutex
+	entries map[string]*mxCacheEntry
+}
+
+type mxCacheEntry struct {
+	result *DNSResult
+	expiry time.Time
+}
+
+func init() {
+	mxCache.entries = make(map[string]*mxCacheEntry)
+}
+
+func getCachedMX(domain string) (*DNSResult, bool) {
+	mxCache.RLock()
+	defer mxCache.RUnlock()
+	entry, ok := mxCache.entries[domain]
+	if !ok || time.Now().After(entry.expiry) {
+		return nil, false
+	}
+	return entry.result, true
+}
+
+func setCachedMX(domain string, result *DNSResult) {
+	mxCache.Lock()
+	defer mxCache.Unlock()
+	mxCache.entries[domain] = &mxCacheEntry{
+		result: result,
+		expiry: time.Now().Add(mxCacheTTL),
+	}
+}
 
 // MXRecord represents an MX record with priority
 type MXRecord struct {
@@ -19,18 +59,26 @@ type MXRecord struct {
 
 // DNSResult contains DNS lookup results
 type DNSResult struct {
-	MXRecords  []MXRecord
-	HasMX      bool
-	SPFRecord  string
-	HasSPF     bool
+	MXRecords   []MXRecord
+	HasMX       bool
+	SPFRecord   string
+	HasSPF      bool
 	DMARCRecord string
-	HasDMARC   bool
-	Error      error
+	HasDMARC    bool
+	Error       error
 }
 
-// LookupMX performs MX record lookup for a domain
+// LookupMX performs MX record lookup for a domain.
+// Results are cached for mxCacheTTL to reduce DNS round-trips in bulk mode.
 func LookupMX(domain string, timeout time.Duration) (*DNSResult, error) {
 	log := debug.GetLogger()
+
+	// Return cached result if still valid
+	if cached, ok := getCachedMX(domain); ok {
+		log.Trace("DNS", "Cache hit for MX %s", domain)
+		return cached, cached.Error
+	}
+
 	timer := log.StartTimer("DNS", fmt.Sprintf("MX lookup for %s", domain))
 	defer timer.Stop()
 
@@ -41,40 +89,38 @@ func LookupMX(domain string, timeout time.Duration) (*DNSResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	resolver := &net.Resolver{
-		PreferGo: true,
-	}
+	resolver := &net.Resolver{PreferGo: true}
 
 	log.Detail("DNS", "Querying MX records for %s", domain)
 
 	mxRecords, err := resolver.LookupMX(ctx, domain)
 	if err != nil {
-		// Check if it's a "no such host" error - domain might not have MX but could have A record
-		if dnsErr, ok := err.(*net.DNSError); ok {
-			if dnsErr.IsNotFound {
-				log.Detail("DNS", "No MX records found for %s, checking A record", domain)
-				// Try A record as fallback
-				addrs, aErr := resolver.LookupHost(ctx, domain)
-				if aErr == nil && len(addrs) > 0 {
-					log.Detail("DNS", "Found A record, using domain as MX: %s", domain)
-					result.MXRecords = []MXRecord{{Host: domain, Priority: 10}}
-					result.HasMX = true
-					return result, nil
-				}
+		if dnsErr, ok := err.(*net.DNSError); ok && dnsErr.IsNotFound {
+			log.Detail("DNS", "No MX records found for %s, checking A record", domain)
+			// A record fallback: domain may accept mail directly
+			addrs, aErr := resolver.LookupHost(ctx, domain)
+			if aErr == nil && len(addrs) > 0 {
+				log.Detail("DNS", "Found A record, using domain as MX: %s", domain)
+				result.MXRecords = []MXRecord{{Host: domain, Priority: 10}}
+				result.HasMX = true
+				setCachedMX(domain, result)
+				return result, nil
 			}
 		}
 		log.Error("DNS", "MX lookup failed: %v", err)
 		result.Error = fmt.Errorf("MX lookup failed: %w", err)
+		// Cache negative results too (for a shorter TTL implicitly, same TTL here)
+		setCachedMX(domain, result)
 		return result, result.Error
 	}
 
 	if len(mxRecords) == 0 {
 		log.Detail("DNS", "No MX records returned")
 		result.Error = fmt.Errorf("no MX records found for %s", domain)
+		setCachedMX(domain, result)
 		return result, result.Error
 	}
 
-	// Convert and sort by priority
 	for _, mx := range mxRecords {
 		host := strings.TrimSuffix(mx.Host, ".")
 		result.MXRecords = append(result.MXRecords, MXRecord{
@@ -84,7 +130,7 @@ func LookupMX(domain string, timeout time.Duration) (*DNSResult, error) {
 		log.Detail("DNS", "  MX[%d]: %s (priority: %d)", len(result.MXRecords)-1, host, mx.Pref)
 	}
 
-	// Sort by priority (lower is better)
+	// Sort by priority (lower value = higher priority)
 	sort.Slice(result.MXRecords, func(i, j int) bool {
 		return result.MXRecords[i].Priority < result.MXRecords[j].Priority
 	})
@@ -92,6 +138,7 @@ func LookupMX(domain string, timeout time.Duration) (*DNSResult, error) {
 	result.HasMX = true
 	log.Success("DNS", "Found %d MX record(s), primary: %s", len(result.MXRecords), result.MXRecords[0].Host)
 
+	setCachedMX(domain, result)
 	return result, nil
 }
 

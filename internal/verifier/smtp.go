@@ -2,9 +2,9 @@ package verifier
 
 import (
 	"bufio"
+	"crypto/rand"
 	"crypto/tls"
 	"fmt"
-	"math/rand"
 	"net"
 	"strconv"
 	"strings"
@@ -13,14 +13,18 @@ import (
 	"github.com/nephila016/emailchecker/internal/debug"
 )
 
+// maxSMTPResponseSize limits the total bytes read in a single SMTP response.
+// Protects against memory exhaustion from malicious/buggy servers.
+const maxSMTPResponseSize = 16 * 1024 // 16 KB
+
 // SMTPConfig holds SMTP connection configuration
 type SMTPConfig struct {
-	Host         string
-	Port         int
-	Timeout      time.Duration
-	FromAddress  string
-	HELODomain   string
-	ForceTLS     bool
+	Host          string
+	Port          int
+	Timeout       time.Duration
+	FromAddress   string
+	HELODomain    string
+	ForceTLS      bool
 	SkipTLSVerify bool
 }
 
@@ -31,7 +35,7 @@ func DefaultSMTPConfig() *SMTPConfig {
 		Timeout:       15 * time.Second,
 		FromAddress:   "test@gmail.com",
 		HELODomain:    "mail.verification-check.com",
-		SkipTLSVerify: true,
+		SkipTLSVerify: false, // Verify TLS certs by default (secure default)
 	}
 }
 
@@ -123,7 +127,7 @@ func (s *SMTPConnection) EHLO() error {
 		if len(line) < 4 {
 			continue
 		}
-		// Remove response code prefix
+		// Remove response code prefix (e.g. "250-STARTTLS" → "STARTTLS")
 		feature := strings.ToUpper(strings.TrimSpace(line[4:]))
 		if strings.HasPrefix(feature, "250") {
 			feature = strings.TrimSpace(feature[3:])
@@ -162,7 +166,7 @@ func (s *SMTPConnection) StartTLS() error {
 	// Upgrade to TLS
 	tlsConfig := &tls.Config{
 		ServerName:         s.config.Host,
-		InsecureSkipVerify: s.config.SkipTLSVerify,
+		InsecureSkipVerify: s.config.SkipTLSVerify, //nolint:gosec // controlled by caller
 	}
 
 	tlsConn := tls.Client(s.conn, tlsConfig)
@@ -178,7 +182,7 @@ func (s *SMTPConnection) StartTLS() error {
 	log.Success("SMTP", "TLS established (version: %s, cipher: %s)",
 		tlsVersionString(state.Version), tls.CipherSuiteName(state.CipherSuite))
 
-	// Re-send EHLO after STARTTLS
+	// Re-send EHLO after STARTTLS (required by RFC)
 	s.features = make(map[string]bool)
 	return s.EHLO()
 }
@@ -200,7 +204,7 @@ func (s *SMTPConnection) MailFrom(from string) error {
 		if err := s.StartTLS(); err != nil {
 			return err
 		}
-		// Retry MAIL FROM after TLS
+		// Retry MAIL FROM after TLS upgrade
 		response, err = s.sendCommand(fmt.Sprintf("MAIL FROM:<%s>", from))
 		if err != nil {
 			return err
@@ -235,12 +239,12 @@ func (s *SMTPConnection) Reset() error {
 // Quit sends QUIT command and closes connection
 func (s *SMTPConnection) Quit() {
 	if s.conn != nil {
-		s.sendCommand("QUIT")
+		s.sendCommand("QUIT") //nolint:errcheck // best-effort on close
 		s.conn.Close()
 	}
 }
 
-// Close closes the connection
+// Close closes the connection without QUIT
 func (s *SMTPConnection) Close() {
 	if s.conn != nil {
 		s.conn.Close()
@@ -285,9 +289,11 @@ func (s *SMTPConnection) sendCommand(cmd string) (string, error) {
 	return response, nil
 }
 
-// readResponse reads a multi-line SMTP response
+// readResponse reads a (possibly multi-line) SMTP response.
+// It enforces maxSMTPResponseSize to protect against memory exhaustion.
 func (s *SMTPConnection) readResponse() (string, error) {
 	var response strings.Builder
+	totalBytes := 0
 
 	for {
 		line, err := s.reader.ReadString('\n')
@@ -295,9 +301,14 @@ func (s *SMTPConnection) readResponse() (string, error) {
 			return response.String(), fmt.Errorf("failed to read response: %w", err)
 		}
 
+		totalBytes += len(line)
+		if totalBytes > maxSMTPResponseSize {
+			return "", fmt.Errorf("SMTP response exceeded maximum size (%d bytes) — possible attack", maxSMTPResponseSize)
+		}
+
 		response.WriteString(line)
 
-		// Check if this is the last line (4th char is space, not hyphen)
+		// Check if this is the last line: 4th char is space, not hyphen
 		if len(line) >= 4 && line[3] == ' ' {
 			break
 		}
@@ -306,7 +317,7 @@ func (s *SMTPConnection) readResponse() (string, error) {
 	return response.String(), nil
 }
 
-// parseCode extracts the numeric code from SMTP response
+// parseCode extracts the numeric code from an SMTP response
 func (s *SMTPConnection) parseCode(response string) int {
 	if len(response) < 3 {
 		return 0
@@ -318,7 +329,7 @@ func (s *SMTPConnection) parseCode(response string) int {
 	return code
 }
 
-// tlsVersionString returns human-readable TLS version
+// tlsVersionString returns a human-readable TLS version string
 func tlsVersionString(version uint16) string {
 	switch version {
 	case tls.VersionTLS10:
@@ -334,14 +345,23 @@ func tlsVersionString(version uint16) string {
 	}
 }
 
-// GenerateRandomEmail generates a random non-existent email for catch-all testing
+// GenerateRandomEmail generates a cryptographically random non-existent email
+// for catch-all domain detection. Uses crypto/rand (not math/rand).
 func GenerateRandomEmail(domain string) string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, 16)
-	for i := range b {
-		b[i] = charset[rand.Intn(len(charset))]
+	const length = 16
+
+	b := make([]byte, length)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: use time-based suffix (should never happen in practice)
+		return fmt.Sprintf("emailverify_test_%d@%s", time.Now().UnixNano(), domain)
 	}
-	return fmt.Sprintf("emailverify_test_%s@%s", string(b), domain)
+
+	result := make([]byte, length)
+	for i, v := range b {
+		result[i] = charset[int(v)%len(charset)]
+	}
+	return fmt.Sprintf("emailverify_test_%s@%s", string(result), domain)
 }
 
 // VerifyEmail performs SMTP verification for a single email
@@ -355,17 +375,15 @@ func VerifyEmail(config *SMTPConfig, email string, checkCatchAll bool) (*Result,
 		totalTimer.Stop()
 	}()
 
-	// Create connection
+	// Create and connect
 	smtp := NewSMTPConnection(config)
 	defer smtp.Close()
 
-	// Connect
 	if err := smtp.Connect(); err != nil {
 		result.SetError(err)
 		return result, err
 	}
 
-	// EHLO
 	if err := smtp.EHLO(); err != nil {
 		result.SetError(err)
 		return result, err
@@ -385,7 +403,7 @@ func VerifyEmail(config *SMTPConfig, email string, checkCatchAll bool) (*Result,
 		return result, err
 	}
 
-	// RCPT TO - the actual verification
+	// RCPT TO — the actual mailbox probe
 	code, response, err := smtp.RcptTo(email)
 	if err != nil {
 		result.SetError(err)
@@ -395,7 +413,6 @@ func VerifyEmail(config *SMTPConfig, email string, checkCatchAll bool) (*Result,
 	result.StatusCode = code
 	result.SMTPResponse = response
 
-	// Interpret response code
 	switch {
 	case code == 250 || code == 251:
 		result.SetValid(code, response)
@@ -419,7 +436,7 @@ func VerifyEmail(config *SMTPConfig, email string, checkCatchAll bool) (*Result,
 		log.Info("VERIFY", "Email UNKNOWN: %s (code: %d)", email, code)
 	}
 
-	// Catch-all detection if email was valid and check requested
+	// Catch-all detection: only when email was valid and caller requested it
 	if checkCatchAll && result.Status == StatusValid {
 		if err := smtp.Reset(); err == nil {
 			if err := smtp.MailFrom(config.FromAddress); err == nil {
@@ -434,7 +451,7 @@ func VerifyEmail(config *SMTPConfig, email string, checkCatchAll bool) (*Result,
 					result.SetRisky("Domain accepts all emails (catch-all)")
 					log.Info("CATCHALL", "Domain is catch-all: %s", result.Domain)
 				} else {
-					log.Detail("CATCHALL", "Domain is NOT catch-all (random email rejected)")
+					log.Detail("CATCHALL", "Domain is NOT catch-all (random email rejected with %d)", catchCode)
 				}
 			}
 		}
@@ -443,31 +460,26 @@ func VerifyEmail(config *SMTPConfig, email string, checkCatchAll bool) (*Result,
 	return result, nil
 }
 
-// parseRejectionReason extracts a human-readable reason from SMTP rejection
+// parseRejectionReason extracts a human-readable reason from an SMTP rejection response
 func parseRejectionReason(response string) string {
-	response = strings.ToLower(response)
+	r := strings.ToLower(response)
 
-	if strings.Contains(response, "user unknown") || strings.Contains(response, "does not exist") {
+	switch {
+	case strings.Contains(r, "user unknown") || strings.Contains(r, "does not exist"):
 		return "User does not exist"
-	}
-	if strings.Contains(response, "mailbox not found") {
+	case strings.Contains(r, "mailbox not found"):
 		return "Mailbox not found"
-	}
-	if strings.Contains(response, "recipient rejected") {
+	case strings.Contains(r, "recipient rejected"):
+		return "Recipient rejected"
+	case strings.Contains(r, "no such user"):
+		return "No such user"
+	case strings.Contains(r, "invalid recipient"):
+		return "Invalid recipient"
+	case strings.Contains(r, "disabled"):
+		return "Mailbox disabled"
+	case strings.Contains(r, "over quota"):
+		return "Mailbox over quota"
+	default:
 		return "Recipient rejected"
 	}
-	if strings.Contains(response, "no such user") {
-		return "No such user"
-	}
-	if strings.Contains(response, "invalid recipient") {
-		return "Invalid recipient"
-	}
-	if strings.Contains(response, "disabled") {
-		return "Mailbox disabled"
-	}
-	if strings.Contains(response, "over quota") {
-		return "Mailbox over quota"
-	}
-
-	return "Recipient rejected"
 }

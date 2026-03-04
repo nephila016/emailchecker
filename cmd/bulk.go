@@ -21,23 +21,23 @@ import (
 )
 
 var (
-	bulkFile            string
-	bulkIP              string
-	bulkPort            int
-	bulkOutput          string
-	bulkWorkers         int
-	bulkDelay           float64
-	bulkJitter          float64
-	bulkTimeout         int
-	bulkFromAddress     string
-	bulkHELO            string
-	bulkHealthEmail     string
-	bulkHealthInterval  int
-	bulkReconnect       int
-	bulkSkipSMTP        bool
-	bulkResume          bool
-	bulkProxy           string
-	bulkCatchAll        bool
+	bulkFile           string
+	bulkIP             string
+	bulkPort           int
+	bulkOutput         string
+	bulkWorkers        int
+	bulkDelay          float64
+	bulkJitter         float64
+	bulkTimeout        int
+	bulkFromAddress    string
+	bulkHELO           string
+	bulkHealthEmail    string
+	bulkHealthInterval int
+	bulkReconnect      int
+	bulkSkipSMTP       bool
+	bulkResume         bool
+	bulkProxy          string
+	bulkCatchAll       bool
 )
 
 var bulkCmd = &cobra.Command{
@@ -52,6 +52,8 @@ Features:
   - Progress bar and statistics
   - Incremental saving
   - Graceful shutdown on Ctrl+C
+  - Automatic MX fallback (tries secondary MX if primary is down)
+  - Duplicate email removal
 
 Examples:
   emailverify bulk -f emails.txt -o results.csv
@@ -78,8 +80,8 @@ func init() {
 	bulkCmd.Flags().IntVar(&bulkHealthInterval, "health-interval", 10, "Health check every N emails")
 	bulkCmd.Flags().IntVar(&bulkReconnect, "reconnect", 5, "Reconnect every N emails")
 	bulkCmd.Flags().BoolVar(&bulkSkipSMTP, "skip-smtp", false, "Skip SMTP verification")
-	bulkCmd.Flags().BoolVar(&bulkResume, "resume", false, "Resume from last position")
-	bulkCmd.Flags().StringVar(&bulkProxy, "proxy", "", "SOCKS5 proxy (socks5://user:pass@host:port)")
+	bulkCmd.Flags().BoolVar(&bulkResume, "resume", false, "Resume from last position (not yet implemented)")
+	bulkCmd.Flags().StringVar(&bulkProxy, "proxy", "", "SOCKS5 proxy socks5://[user:pass@]host:port (not yet implemented)")
 	bulkCmd.Flags().BoolVar(&bulkCatchAll, "catch-all", false, "Check for catch-all domains")
 
 	bulkCmd.MarkFlagRequired("file")
@@ -89,8 +91,18 @@ func runBulk(cmd *cobra.Command, args []string) error {
 	log := debug.GetLogger()
 	startTime := time.Now()
 
-	// Load emails
-	emails, err := loadEmails(bulkFile)
+	// Warn about flags that are accepted but not yet implemented
+	if bulkProxy != "" {
+		color.New(color.FgYellow).Fprintln(os.Stderr,
+			"Warning: --proxy is not yet implemented and will be ignored")
+	}
+	if bulkResume {
+		color.New(color.FgYellow).Fprintln(os.Stderr,
+			"Warning: --resume is not yet implemented and will be ignored")
+	}
+
+	// Load and deduplicate emails
+	emails, duplicates, err := loadEmails(bulkFile)
 	if err != nil {
 		return err
 	}
@@ -99,9 +111,8 @@ func runBulk(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no emails found in %s", bulkFile)
 	}
 
-	// Print settings
 	if !quiet {
-		printBulkSettings(len(emails))
+		printBulkSettings(len(emails), duplicates)
 	}
 
 	// Initial health check
@@ -111,7 +122,7 @@ func runBulk(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Create verifier
+	// Build verifier config
 	config := &verifier.Config{
 		CustomHost:        bulkIP,
 		Port:              bulkPort,
@@ -126,7 +137,7 @@ func runBulk(cmd *cobra.Command, args []string) error {
 	}
 	v := verifier.New(config)
 
-	// Create output writer
+	// Open output writer
 	format := output.DetectFormat(bulkOutput)
 	writer, err := output.NewWriter(bulkOutput, format)
 	if err != nil {
@@ -134,7 +145,7 @@ func runBulk(cmd *cobra.Command, args []string) error {
 	}
 	defer writer.Close()
 
-	// Create worker pool
+	// Build worker pool
 	poolConfig := &worker.PoolConfig{
 		Workers:        bulkWorkers,
 		Delay:          time.Duration(bulkDelay * float64(time.Second)),
@@ -145,14 +156,14 @@ func runBulk(cmd *cobra.Command, args []string) error {
 	}
 	pool := worker.NewPool(v, poolConfig)
 
-	// Statistics
+	// Statistics (protected by mutex)
 	var stats struct {
 		sync.Mutex
-		valid    int
-		invalid  int
-		unknown  int
-		risky    int
-		errors   int
+		valid   int
+		invalid int
+		unknown int
+		risky   int
+		errors  int
 	}
 
 	// Progress bar
@@ -173,22 +184,25 @@ func runBulk(cmd *cobra.Command, args []string) error {
 		)
 	}
 
-	// Handle graceful shutdown
+	// Graceful shutdown on Ctrl+C / SIGTERM
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
 	go func() {
-		<-sigChan
-		fmt.Println("\nShutting down gracefully...")
-		cancel()
-		pool.Stop()
+		select {
+		case <-sigChan:
+			fmt.Fprintln(os.Stderr, "\nShutting down gracefully...")
+			cancel()
+			pool.Stop()
+		case <-ctx.Done():
+		}
 	}()
 
-	// Result handler
+	// Per-result callback: update stats, write output, advance progress bar
 	pool.SetCallbacks(
 		func(result *verifier.Result) {
-			// Update stats
 			stats.Lock()
 			switch result.Status {
 			case verifier.StatusValid:
@@ -204,16 +218,15 @@ func runBulk(cmd *cobra.Command, args []string) error {
 			}
 			stats.Unlock()
 
-			// Write result
-			writer.Write(result)
+			if err := writer.Write(result); err != nil {
+				log.Error("OUTPUT", "Failed to write result for %s: %v", result.Email, err)
+			}
 			writer.Flush()
 
-			// Update progress bar
 			if bar != nil {
-				bar.Add(1)
+				bar.Add(1) //nolint:errcheck
 			}
 
-			// Debug output
 			log.Detail("RESULT", "%s: %s (code: %d)", result.Email, result.Status, result.StatusCode)
 		},
 		nil,
@@ -222,7 +235,7 @@ func runBulk(cmd *cobra.Command, args []string) error {
 	// Start workers
 	pool.Start()
 
-	// Submit jobs
+	// Feed jobs to the pool in a separate goroutine so we can also drain results
 	go func() {
 		for i, email := range emails {
 			select {
@@ -232,50 +245,61 @@ func runBulk(cmd *cobra.Command, args []string) error {
 				pool.Submit(email, i)
 			}
 		}
+		// All jobs submitted — signal workers to drain and exit
 		pool.Close()
 	}()
 
-	// Wait for results
+	// Drain result channel (actual processing happens in the callback)
 	for range pool.Results() {
-		// Results are handled in callback
 	}
 
-	// Print summary
+	// Finalize
 	if !quiet {
 		if bar != nil {
-			bar.Finish()
+			bar.Finish() //nolint:errcheck
 		}
 		printBulkSummary(&stats, len(emails), startTime)
 	}
 
 	fmt.Printf("\nResults saved to: %s\n", bulkOutput)
-
 	return nil
 }
 
-func loadEmails(filename string) ([]string, error) {
-	file, err := os.Open(filename)
+// loadEmails reads emails from filename, skipping blanks and comments.
+// It deduplicates (case-insensitive) and returns the unique list along with
+// the number of duplicates removed.
+func loadEmails(filename string) (emails []string, duplicates int, err error) {
+	f, err := os.Open(filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
+		return nil, 0, fmt.Errorf("failed to open file: %w", err)
 	}
-	defer file.Close()
+	defer f.Close()
 
-	var emails []string
-	scanner := bufio.NewScanner(file)
+	seen := make(map[string]struct{})
+
+	scanner := bufio.NewScanner(f)
+	// Allow lines up to 1 MB (handles extremely long lines gracefully)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		key := strings.ToLower(line)
+		if _, exists := seen[key]; exists {
+			duplicates++
+			continue
+		}
+		seen[key] = struct{}{}
 		emails = append(emails, line)
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
+		return nil, duplicates, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	return emails, nil
+	return emails, duplicates, nil
 }
 
 func runInitialHealthCheck() bool {
@@ -319,9 +343,10 @@ func runInitialHealthCheck() bool {
 	return false
 }
 
-func printBulkSettings(count int) {
+func printBulkSettings(count, duplicates int) {
 	cyan := color.New(color.FgCyan)
 	white := color.New(color.FgWhite, color.Bold)
+	yellow := color.New(color.FgYellow)
 
 	fmt.Println()
 	cyan.Println("========================================")
@@ -330,10 +355,13 @@ func printBulkSettings(count int) {
 	fmt.Println()
 
 	fmt.Printf("Emails to verify:  %d\n", count)
+	if duplicates > 0 {
+		yellow.Printf("Duplicates removed: %d\n", duplicates)
+	}
 	if bulkIP != "" {
 		fmt.Printf("Server:            %s:%d\n", bulkIP, bulkPort)
 	} else {
-		fmt.Printf("Server:            Auto (MX lookup)\n")
+		fmt.Printf("Server:            Auto (MX lookup with fallback)\n")
 	}
 	fmt.Printf("Workers:           %d\n", bulkWorkers)
 	fmt.Printf("Delay:             %.1fs (+%.1fs jitter)\n", bulkDelay, bulkJitter)

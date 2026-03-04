@@ -11,35 +11,40 @@ import (
 // Config holds verifier configuration
 type Config struct {
 	// Connection settings
-	CustomHost    string
-	Port          int
-	Timeout       time.Duration
-	FromAddress   string
-	HELODomain    string
+	CustomHost  string
+	Port        int
+	Timeout     time.Duration
+	FromAddress string
+	HELODomain  string
 
 	// Verification options
-	SkipSMTP       bool
-	CheckCatchAll  bool
-	SkipTLSVerify  bool
+	SkipSMTP      bool
+	CheckCatchAll bool
+	SkipTLSVerify bool
 
 	// Classification options
-	CheckDisposable  bool
-	CheckRole        bool
+	CheckDisposable   bool
+	CheckRole         bool
 	CheckFreeProvider bool
+
+	// Retry settings
+	// MaxMXFallback is how many MX servers to try before giving up (0 = try all)
+	MaxMXFallback int
 }
 
 // DefaultConfig returns default verifier configuration
 func DefaultConfig() *Config {
 	return &Config{
-		Port:             25,
-		Timeout:          15 * time.Second,
-		FromAddress:      "test@gmail.com",
-		HELODomain:       "mail.verification-check.com",
-		CheckCatchAll:    false,
-		SkipTLSVerify:    true,
-		CheckDisposable:  true,
-		CheckRole:        true,
+		Port:              25,
+		Timeout:           15 * time.Second,
+		FromAddress:       "test@gmail.com",
+		HELODomain:        "mail.verification-check.com",
+		CheckCatchAll:     false,
+		SkipTLSVerify:     true, // Many servers use self-signed certs; allow override
+		CheckDisposable:   true,
+		CheckRole:         true,
 		CheckFreeProvider: true,
+		MaxMXFallback:     3, // Try up to 3 MX servers before giving up
 	}
 }
 
@@ -64,6 +69,7 @@ func (v *Verifier) Verify(email string) *Result {
 	totalTimer := log.StartTimer("VERIFY", fmt.Sprintf("Full verification for %s", email))
 	defer func() {
 		result.LatencyMs = totalTimer.Elapsed().Milliseconds()
+		totalTimer.Stop()
 	}()
 
 	// Layer 1: Syntax validation
@@ -75,21 +81,19 @@ func (v *Verifier) Verify(email string) *Result {
 
 	if !valid {
 		result.SetInvalid(0, "", "Invalid email syntax")
-		totalTimer.Stop()
 		return result
 	}
 
-	// Check for typos
+	// Optional: hint about likely typos
 	if suggestion := SuggestTypoFix(domain); suggestion != "" {
 		log.Info("VERIFY", "Possible typo detected: %s -> %s", domain, suggestion)
 	}
 
-	// Layer 2: Domain checks
+	// Layer 2: Domain / MX lookup
 	log.Info("VERIFY", "Layer 2: Domain/MX validation")
 	dnsResult, err := LookupMX(domain, v.config.Timeout)
 	if err != nil {
 		result.SetInvalid(0, "", fmt.Sprintf("Domain error: %v", err))
-		totalTimer.Stop()
 		return result
 	}
 
@@ -128,44 +132,80 @@ func (v *Verifier) Verify(email string) *Result {
 		log.Info("VERIFY", "SMTP verification skipped (--skip-smtp)")
 		result.SetUnknown("SMTP verification skipped")
 		result.ConfidenceScore = calculateConfidence(result)
-		totalTimer.Stop()
 		return result
 	}
 
 	// Layer 4: SMTP verification
 	log.Info("VERIFY", "Layer 4: SMTP verification")
 
-	// Determine SMTP host
-	smtpHost := v.config.CustomHost
-	if smtpHost == "" {
+	// Use custom host if provided, otherwise walk MX records in priority order
+	if v.config.CustomHost != "" {
+		smtpResult, smtpErr := v.trySMTP(v.config.CustomHost, email)
+		v.copySmtpResult(result, smtpResult, smtpErr)
+	} else {
 		if len(result.MXRecords) == 0 {
 			result.SetInvalid(0, "", "No mail server found")
-			totalTimer.Stop()
 			return result
 		}
-		smtpHost = result.MXRecords[0]
+		v.tryMXFallback(result, email)
 	}
 
-	// Configure SMTP
+	// Final confidence score
+	result.ConfidenceScore = calculateConfidence(result)
+	return result
+}
+
+// tryMXFallback attempts SMTP verification against MX records in priority order.
+// It stops at the first non-error result or when MaxMXFallback is reached.
+func (v *Verifier) tryMXFallback(result *Result, email string) {
+	log := debug.GetLogger()
+
+	limit := len(result.MXRecords)
+	if v.config.MaxMXFallback > 0 && v.config.MaxMXFallback < limit {
+		limit = v.config.MaxMXFallback
+	}
+
+	for i := 0; i < limit; i++ {
+		mxHost := result.MXRecords[i]
+
+		if i > 0 {
+			log.Info("VERIFY", "Primary MX failed, trying fallback MX[%d]: %s", i, mxHost)
+		}
+
+		smtpResult, err := v.trySMTP(mxHost, email)
+		v.copySmtpResult(result, smtpResult, err)
+
+		// Stop if we got a definitive answer (not a connection/transport error)
+		if result.Status != StatusError {
+			return
+		}
+	}
+
+	// All MX servers failed
+	log.Error("VERIFY", "All %d MX server(s) failed for %s", limit, email)
+}
+
+// trySMTP performs SMTP verification against a single host
+func (v *Verifier) trySMTP(host, email string) (*Result, error) {
 	smtpConfig := &SMTPConfig{
-		Host:          smtpHost,
+		Host:          host,
 		Port:          v.config.Port,
 		Timeout:       v.config.Timeout,
 		FromAddress:   v.config.FromAddress,
 		HELODomain:    v.config.HELODomain,
 		SkipTLSVerify: v.config.SkipTLSVerify,
 	}
+	return VerifyEmail(smtpConfig, email, v.config.CheckCatchAll)
+}
 
-	// Perform SMTP verification
-	smtpResult, err := VerifyEmail(smtpConfig, email, v.config.CheckCatchAll)
-	if err != nil {
-		log.Error("VERIFY", "SMTP verification error: %v", err)
-		result.SetError(err)
-		totalTimer.Stop()
-		return result
+// copySmtpResult copies SMTP result fields into the main result
+func (v *Verifier) copySmtpResult(result *Result, smtpResult *Result, err error) {
+	if err != nil || smtpResult == nil {
+		if smtpResult != nil {
+			result.SetError(fmt.Errorf("%s", smtpResult.Error))
+		}
+		return
 	}
-
-	// Copy SMTP results
 	result.Valid = smtpResult.Valid
 	result.Status = smtpResult.Status
 	result.StatusCode = smtpResult.StatusCode
@@ -175,15 +215,13 @@ func (v *Verifier) Verify(email string) *Result {
 	result.CatchAllChecked = smtpResult.CatchAllChecked
 	result.TLSUsed = smtpResult.TLSUsed
 	result.SMTPSuccess = smtpResult.SMTPSuccess
-
-	// Recalculate confidence with all data
-	result.ConfidenceScore = calculateConfidence(result)
-
-	totalTimer.Stop()
-	return result
+	if smtpResult.Error != "" {
+		result.Error = smtpResult.Error
+	}
 }
 
-// VerifyBatch verifies multiple emails (sequential)
+// VerifyBatch verifies multiple emails sequentially.
+// For concurrent bulk verification use worker.Pool instead.
 func (v *Verifier) VerifyBatch(emails []string) []*Result {
 	results := make([]*Result, len(emails))
 	for i, email := range emails {
@@ -192,16 +230,17 @@ func (v *Verifier) VerifyBatch(emails []string) []*Result {
 	return results
 }
 
-// QuickCheck performs syntax and DNS check only (no SMTP)
+// QuickCheck performs syntax and DNS check only (no SMTP).
+// It is safe to call concurrently — it does NOT mutate the receiver's config.
 func (v *Verifier) QuickCheck(email string) *Result {
-	originalSkip := v.config.SkipSMTP
-	v.config.SkipSMTP = true
-	result := v.Verify(email)
-	v.config.SkipSMTP = originalSkip
-	return result
+	// Create an isolated copy of config to avoid a data race on SkipSMTP.
+	cfgCopy := *v.config
+	cfgCopy.SkipSMTP = true
+	quickV := &Verifier{config: &cfgCopy}
+	return quickV.Verify(email)
 }
 
-// CheckDomain checks domain-level information
+// CheckDomain checks domain-level information (MX, SPF, DMARC, classification)
 func (v *Verifier) CheckDomain(domain string) (*DomainResult, error) {
 	log := debug.GetLogger()
 
@@ -209,7 +248,6 @@ func (v *Verifier) CheckDomain(domain string) (*DomainResult, error) {
 		Domain: domain,
 	}
 
-	// MX lookup
 	log.Info("DOMAIN", "Checking MX records for %s", domain)
 	dnsResult, err := LookupMX(domain, v.config.Timeout)
 	if err != nil {
@@ -220,15 +258,12 @@ func (v *Verifier) CheckDomain(domain string) (*DomainResult, error) {
 	result.HasMX = dnsResult.HasMX
 	result.MXRecords = dnsResult.GetMXHosts()
 
-	// SPF check
 	log.Info("DOMAIN", "Checking SPF record")
 	result.SPFRecord, result.HasSPF = LookupSPF(domain, v.config.Timeout)
 
-	// DMARC check
 	log.Info("DOMAIN", "Checking DMARC record")
 	result.DMARCRecord, result.HasDMARC = LookupDMARC(domain, v.config.Timeout)
 
-	// Classification
 	result.IsDisposable = classifier.IsDisposable(domain)
 	result.IsFreeProvider = classifier.IsFreeProvider(domain)
 
