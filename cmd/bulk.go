@@ -109,11 +109,11 @@ func runBulk(cmd *cobra.Command, args []string) error {
 	// Load and deduplicate emails
 	emails, duplicates, err := loadEmails(bulkFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed loading input emails from %s: %w", bulkFile, err)
 	}
 
 	if len(emails) == 0 {
-		return fmt.Errorf("no emails found in %s", bulkFile)
+		return fmt.Errorf("no processable emails found in %s (empty file, comments-only file, or all entries were duplicates)", bulkFile)
 	}
 
 	if !quiet {
@@ -123,7 +123,7 @@ func runBulk(cmd *cobra.Command, args []string) error {
 	// Initial health check
 	if bulkHealthEmail != "" {
 		if !runInitialHealthCheck() {
-			return fmt.Errorf("initial health check failed")
+			return fmt.Errorf("initial health check failed for --health-email=%s (target SMTP path may be blocked or misconfigured)", bulkHealthEmail)
 		}
 	}
 
@@ -146,7 +146,7 @@ func runBulk(cmd *cobra.Command, args []string) error {
 	format := output.DetectFormat(bulkOutput)
 	writer, err := output.NewWriter(bulkOutput, format)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create output writer for %s (format: %s): %w", bulkOutput, format, err)
 	}
 	defer writer.Close()
 

@@ -69,7 +69,7 @@ func runDomain(cmd *cobra.Command, args []string) error {
 
 	result, err := v.CheckDomain(domain, domainCheckSPF, domainCheckDMARC)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed domain lookup for %s: %w", domain, err)
 	}
 
 	// Check catch-all if requested
@@ -78,10 +78,16 @@ func runDomain(cmd *cobra.Command, args []string) error {
 	}
 
 	if domainJSON {
-		return outputDomainJSON(result)
+		if err := outputDomainJSON(result); err != nil {
+			return fmt.Errorf("failed to write JSON output for domain %s: %w", domain, err)
+		}
+		return nil
 	}
 
-	return outputDomainConsole(result)
+	if err := outputDomainConsole(result); err != nil {
+		return fmt.Errorf("failed to render domain output for %s: %w", domain, err)
+	}
+	return nil
 }
 
 func performCatchAllCheck(domain, mxHost string, config *verifier.Config) bool {

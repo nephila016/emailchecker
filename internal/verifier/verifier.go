@@ -93,7 +93,7 @@ func (v *Verifier) Verify(email string) *Result {
 	log.Info("VERIFY", "Layer 2: Domain/MX validation")
 	dnsResult, err := LookupMX(domain, v.config.Timeout)
 	if err != nil {
-		result.SetInvalid(0, "", fmt.Sprintf("Domain error: %v", err))
+		result.SetInvalid(0, "", fmt.Sprintf("domain %s lookup failed: %v", domain, err))
 		return result
 	}
 
@@ -140,6 +140,7 @@ func (v *Verifier) Verify(email string) *Result {
 
 	// Use custom host if provided, otherwise walk MX records in priority order
 	if v.config.CustomHost != "" {
+		result.MXHost = v.config.CustomHost
 		smtpResult, smtpErr := v.trySMTP(v.config.CustomHost, email)
 		v.copySmtpResult(result, smtpResult, smtpErr)
 	} else {
@@ -167,6 +168,7 @@ func (v *Verifier) tryMXFallback(result *Result, email string) {
 
 	for i := 0; i < limit; i++ {
 		mxHost := result.MXRecords[i]
+		result.MXHost = mxHost
 
 		if i > 0 {
 			log.Info("VERIFY", "Primary MX failed, trying fallback MX[%d]: %s", i, mxHost)
@@ -182,6 +184,7 @@ func (v *Verifier) tryMXFallback(result *Result, email string) {
 	}
 
 	// All MX servers failed
+	result.SetError(fmt.Errorf("all %d MX server(s) failed for %s; last SMTP error: %s", limit, email, result.Error))
 	log.Error("VERIFY", "All %d MX server(s) failed for %s", limit, email)
 }
 
@@ -200,10 +203,16 @@ func (v *Verifier) trySMTP(host, email string) (*Result, error) {
 
 // copySmtpResult copies SMTP result fields into the main result
 func (v *Verifier) copySmtpResult(result *Result, smtpResult *Result, err error) {
-	if err != nil || smtpResult == nil {
-		if smtpResult != nil {
-			result.SetError(fmt.Errorf("%s", smtpResult.Error))
-		}
+	if err != nil {
+		result.SetError(fmt.Errorf("SMTP verification failed for %s via %s:%d: %w", result.Email, result.MXHost, v.config.Port, err))
+		return
+	}
+	if smtpResult == nil {
+		result.SetError(fmt.Errorf("SMTP verification returned empty result for %s via %s:%d", result.Email, result.MXHost, v.config.Port))
+		return
+	}
+	if smtpResult.Status == StatusError && smtpResult.Error != "" {
+		result.SetError(fmt.Errorf("SMTP verification failed for %s via %s:%d: %s", result.Email, result.MXHost, v.config.Port, smtpResult.Error))
 		return
 	}
 	result.Valid = smtpResult.Valid
