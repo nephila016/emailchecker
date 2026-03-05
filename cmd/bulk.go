@@ -8,16 +8,17 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/schollz/progressbar/v3"
-	"github.com/spf13/cobra"
 	"github.com/nephila016/emailchecker/internal/debug"
 	"github.com/nephila016/emailchecker/internal/output"
 	"github.com/nephila016/emailchecker/internal/verifier"
 	"github.com/nephila016/emailchecker/internal/worker"
+	"github.com/schollz/progressbar/v3"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -100,15 +101,19 @@ func runBulk(cmd *cobra.Command, args []string) error {
 		color.New(color.FgYellow).Fprintln(os.Stderr,
 			"Warning: --resume is not yet implemented and will be ignored")
 	}
+	if bulkReconnect > 0 {
+		color.New(color.FgYellow).Fprintln(os.Stderr,
+			"Warning: --reconnect is not yet implemented and will be ignored")
+	}
 
 	// Load and deduplicate emails
 	emails, duplicates, err := loadEmails(bulkFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed loading input emails from %s: %w", bulkFile, err)
 	}
 
 	if len(emails) == 0 {
-		return fmt.Errorf("no emails found in %s", bulkFile)
+		return fmt.Errorf("no processable emails found in %s (empty file, comments-only file, or all entries were duplicates)", bulkFile)
 	}
 
 	if !quiet {
@@ -118,7 +123,7 @@ func runBulk(cmd *cobra.Command, args []string) error {
 	// Initial health check
 	if bulkHealthEmail != "" {
 		if !runInitialHealthCheck() {
-			return fmt.Errorf("initial health check failed")
+			return fmt.Errorf("initial health check failed for --health-email=%s (target SMTP path may be blocked or misconfigured)", bulkHealthEmail)
 		}
 	}
 
@@ -141,7 +146,7 @@ func runBulk(cmd *cobra.Command, args []string) error {
 	format := output.DetectFormat(bulkOutput)
 	writer, err := output.NewWriter(bulkOutput, format)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create output writer for %s (format: %s): %w", bulkOutput, format, err)
 	}
 	defer writer.Close()
 
@@ -200,6 +205,9 @@ func runBulk(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
+	var writerMu sync.Mutex
+	var sinceFlush int64
+
 	// Per-result callback: update stats, write output, advance progress bar
 	pool.SetCallbacks(
 		func(result *verifier.Result) {
@@ -218,10 +226,16 @@ func runBulk(cmd *cobra.Command, args []string) error {
 			}
 			stats.Unlock()
 
+			writerMu.Lock()
 			if err := writer.Write(result); err != nil {
 				log.Error("OUTPUT", "Failed to write result for %s: %v", result.Email, err)
 			}
-			writer.Flush()
+			if atomic.AddInt64(&sinceFlush, 1)%25 == 0 {
+				if err := writer.Flush(); err != nil {
+					log.Error("OUTPUT", "Failed to flush output: %v", err)
+				}
+			}
+			writerMu.Unlock()
 
 			if bar != nil {
 				bar.Add(1) //nolint:errcheck
@@ -260,6 +274,13 @@ func runBulk(cmd *cobra.Command, args []string) error {
 		}
 		printBulkSummary(&stats, len(emails), startTime)
 	}
+
+	writerMu.Lock()
+	if err := writer.Flush(); err != nil {
+		writerMu.Unlock()
+		return fmt.Errorf("failed to flush output: %w", err)
+	}
+	writerMu.Unlock()
 
 	fmt.Printf("\nResults saved to: %s\n", bulkOutput)
 	return nil
