@@ -40,7 +40,7 @@ func DefaultConfig() *Config {
 		FromAddress:       "test@gmail.com",
 		HELODomain:        "mail.verification-check.com",
 		CheckCatchAll:     false,
-		SkipTLSVerify:     true, // Many servers use self-signed certs; allow override
+		SkipTLSVerify:     false, // Secure default: verify TLS certificates
 		CheckDisposable:   true,
 		CheckRole:         true,
 		CheckFreeProvider: true,
@@ -241,7 +241,7 @@ func (v *Verifier) QuickCheck(email string) *Result {
 }
 
 // CheckDomain checks domain-level information (MX, SPF, DMARC, classification)
-func (v *Verifier) CheckDomain(domain string) (*DomainResult, error) {
+func (v *Verifier) CheckDomain(domain string, checkSPF, checkDMARC bool) (*DomainResult, error) {
 	log := debug.GetLogger()
 
 	result := &DomainResult{
@@ -258,11 +258,15 @@ func (v *Verifier) CheckDomain(domain string) (*DomainResult, error) {
 	result.HasMX = dnsResult.HasMX
 	result.MXRecords = dnsResult.GetMXHosts()
 
-	log.Info("DOMAIN", "Checking SPF record")
-	result.SPFRecord, result.HasSPF = LookupSPF(domain, v.config.Timeout)
+	if checkSPF {
+		log.Info("DOMAIN", "Checking SPF record")
+		result.SPFRecord, result.HasSPF = LookupSPF(domain, v.config.Timeout)
+	}
 
-	log.Info("DOMAIN", "Checking DMARC record")
-	result.DMARCRecord, result.HasDMARC = LookupDMARC(domain, v.config.Timeout)
+	if checkDMARC {
+		log.Info("DOMAIN", "Checking DMARC record")
+		result.DMARCRecord, result.HasDMARC = LookupDMARC(domain, v.config.Timeout)
+	}
 
 	result.IsDisposable = classifier.IsDisposable(domain)
 	result.IsFreeProvider = classifier.IsFreeProvider(domain)
