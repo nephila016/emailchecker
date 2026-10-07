@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"github.com/nephila016/emailchecker/internal/debug"
 	"github.com/nephila016/emailchecker/internal/verifier"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -18,6 +18,10 @@ var (
 	domainCheckDMARC    bool
 	domainJSON          bool
 	domainTimeout       int
+	domainPort          int
+	domainFromAddress   string
+	domainHELO          string
+	domainSkipTLSVerify bool
 )
 
 var domainCmd = &cobra.Command{
@@ -43,6 +47,10 @@ func init() {
 	domainCmd.Flags().BoolVar(&domainCheckDMARC, "check-dmarc", false, "Check DMARC record")
 	domainCmd.Flags().BoolVar(&domainJSON, "json", false, "Output as JSON")
 	domainCmd.Flags().IntVarP(&domainTimeout, "timeout", "t", 15, "Timeout in seconds")
+	domainCmd.Flags().IntVarP(&domainPort, "port", "p", 25, "SMTP port (used for catch-all check)")
+	domainCmd.Flags().StringVar(&domainFromAddress, "from", "test@gmail.com", "MAIL FROM address (used for catch-all check)")
+	domainCmd.Flags().StringVar(&domainHELO, "helo", "mail.verification-check.com", "EHLO domain (used for catch-all check)")
+	domainCmd.Flags().BoolVar(&domainSkipTLSVerify, "skip-tls-verify", false, "Skip TLS cert verification (insecure)")
 }
 
 func runDomain(cmd *cobra.Command, args []string) error {
@@ -51,24 +59,17 @@ func runDomain(cmd *cobra.Command, args []string) error {
 
 	log.Info("DOMAIN", "Checking domain: %s", domain)
 
-	config := &verifier.Config{
-		Timeout: time.Duration(domainTimeout) * time.Second,
-	}
+	config := verifier.DefaultConfig()
+	config.Timeout = time.Duration(domainTimeout) * time.Second
+	config.Port = domainPort
+	config.FromAddress = domainFromAddress
+	config.HELODomain = domainHELO
+	config.SkipTLSVerify = domainSkipTLSVerify
 	v := verifier.New(config)
 
-	result, err := v.CheckDomain(domain)
+	result, err := v.CheckDomain(domain, domainCheckSPF, domainCheckDMARC)
 	if err != nil {
-		return err
-	}
-
-	// Check SPF if requested
-	if domainCheckSPF {
-		result.SPFRecord, result.HasSPF = verifier.LookupSPF(domain, config.Timeout)
-	}
-
-	// Check DMARC if requested
-	if domainCheckDMARC {
-		result.DMARCRecord, result.HasDMARC = verifier.LookupDMARC(domain, config.Timeout)
+		return fmt.Errorf("failed domain lookup for %s: %w", domain, err)
 	}
 
 	// Check catch-all if requested
@@ -77,10 +78,16 @@ func runDomain(cmd *cobra.Command, args []string) error {
 	}
 
 	if domainJSON {
-		return outputDomainJSON(result)
+		if err := outputDomainJSON(result); err != nil {
+			return fmt.Errorf("failed to write JSON output for domain %s: %w", domain, err)
+		}
+		return nil
 	}
 
-	return outputDomainConsole(result)
+	if err := outputDomainConsole(result); err != nil {
+		return fmt.Errorf("failed to render domain output for %s: %w", domain, err)
+	}
+	return nil
 }
 
 func performCatchAllCheck(domain, mxHost string, config *verifier.Config) bool {
@@ -91,11 +98,12 @@ func performCatchAllCheck(domain, mxHost string, config *verifier.Config) bool {
 	randomEmail := verifier.GenerateRandomEmail(domain)
 
 	smtpConfig := &verifier.SMTPConfig{
-		Host:        mxHost,
-		Port:        25,
-		Timeout:     config.Timeout,
-		FromAddress: "test@gmail.com",
-		HELODomain:  "mail.verification-check.com",
+		Host:          mxHost,
+		Port:          config.Port,
+		Timeout:       config.Timeout,
+		FromAddress:   config.FromAddress,
+		HELODomain:    config.HELODomain,
+		SkipTLSVerify: config.SkipTLSVerify,
 	}
 
 	result, err := verifier.VerifyEmail(smtpConfig, randomEmail, false)

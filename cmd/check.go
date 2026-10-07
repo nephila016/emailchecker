@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"github.com/nephila016/emailchecker/internal/debug"
 	"github.com/nephila016/emailchecker/internal/output"
 	"github.com/nephila016/emailchecker/internal/verifier"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -68,15 +68,15 @@ func runCheck(cmd *cobra.Command, args []string) error {
 
 	// Create verifier config
 	config := &verifier.Config{
-		CustomHost:      checkIP,
-		Port:            checkPort,
-		Timeout:         time.Duration(checkTimeout) * time.Second,
-		FromAddress:     checkFromAddress,
-		HELODomain:      checkHELO,
-		SkipSMTP:        checkSkipSMTP,
-		CheckCatchAll:   checkCatchAll,
-		CheckDisposable: true,
-		CheckRole:       true,
+		CustomHost:        checkIP,
+		Port:              checkPort,
+		Timeout:           time.Duration(checkTimeout) * time.Second,
+		FromAddress:       checkFromAddress,
+		HELODomain:        checkHELO,
+		SkipSMTP:          checkSkipSMTP,
+		CheckCatchAll:     checkCatchAll,
+		CheckDisposable:   true,
+		CheckRole:         true,
 		CheckFreeProvider: true,
 	}
 
@@ -86,14 +86,23 @@ func runCheck(cmd *cobra.Command, args []string) error {
 
 	// Output
 	if checkJSON {
-		return outputJSON(result)
+		if err := outputJSON(result); err != nil {
+			return fmt.Errorf("failed to write JSON output for %s: %w", email, err)
+		}
+		return nil
 	}
 
 	if checkOutput != "" {
-		return outputToFile(result, checkOutput)
+		if err := outputToFile(result, checkOutput); err != nil {
+			return fmt.Errorf("failed to write check result for %s to %s: %w", email, checkOutput, err)
+		}
+		return nil
 	}
 
-	return outputConsole(result)
+	if err := outputConsole(result); err != nil {
+		return fmt.Errorf("failed to render console output for %s: %w", email, err)
+	}
+	return nil
 }
 
 func outputJSON(result *verifier.Result) error {
@@ -106,12 +115,16 @@ func outputToFile(result *verifier.Result, filename string) error {
 	format := output.DetectFormat(filename)
 	writer, err := output.NewWriter(filename, format)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create output writer for %s (format: %s): %w", filename, format, err)
 	}
 	defer writer.Close()
 
 	if err := writer.Write(result); err != nil {
-		return err
+		return fmt.Errorf("failed to write verification result to %s: %w", filename, err)
+	}
+
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("failed to flush verification result to %s: %w", filename, err)
 	}
 
 	fmt.Printf("Result saved to: %s\n", filename)
